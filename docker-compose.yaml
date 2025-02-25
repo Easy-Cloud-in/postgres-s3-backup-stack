@@ -1,0 +1,132 @@
+---
+services:
+  postgres:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ${POSTGRES_CONTAINER_NAME}
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_ARCHIVE_MODE: 'on'
+      POSTGRES_INITDB_ARGS: '--auth-host=scram-sha-256 --auth-local=scram-sha-256'
+      POSTGRES_HOST_AUTH_METHOD: 'scram-sha-256'
+      POSTGRES_ARCHIVE_COMMAND: 'test ! -f /var/lib/postgresql/archive/%f && wal-g wal-push %p'
+      WALG_S3_PREFIX: ${WALG_S3_PREFIX}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_REGION: ${AWS_REGION}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - pg_archive:/var/lib/postgresql/archive
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      postgres-network:
+        aliases:
+          - postgres
+    ports:
+      - '5432' # Only expose internally
+
+  pgbouncer:
+    build:
+      context: .
+      dockerfile: Dockerfile.pgbouncer
+    container_name: ${PGBOUNCER_CONTAINER_NAME}
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - POOL_MODE=transaction
+      - MAX_CLIENT_CONN=100
+      - DEFAULT_POOL_SIZE=20
+      - AUTH_TYPE=scram-sha-256
+      - AUTH_FILE=/etc/pgbouncer/userlist.txt
+      - ADMIN_USERS=${POSTGRES_USER}
+      - STATS_USERS=${POSTGRES_USER}
+    ports:
+      - '${PG_BOUNCER_PORT:-6432}:6432'
+    networks:
+      - postgres-network
+    volumes:
+      - pgbouncer_config:/etc/pgbouncer
+    entrypoint: ['/init-userlist.sh']
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'bash',
+          '-c',
+          "PGPASSWORD=${POSTGRES_PASSWORD} psql -h localhost -p 6432 -U ${POSTGRES_USER} -d postgres -c 'SELECT 1;' >/dev/null 2>&1",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  backup:
+    build:
+      context: .
+      dockerfile: Dockerfile.backup
+    container_name: ${BACKUP_CONTAINER_NAME}
+    restart: always
+    user: root
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      WALG_S3_PREFIX: s3://${S3_BUCKET}/${CLIENT_NAME}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_REGION: ${AWS_REGION}
+      BACKUP_SCHEDULE: '0 0 * * *' # This will be converted to seconds
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      WAL_RETENTION_DAYS: ${WAL_RETENTION_DAYS:-3}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-7}
+      S3_BUCKET: ${S3_BUCKET}
+      CLIENT_NAME: ${CLIENT_NAME}
+      PGHOST: postgres
+      PGPORT: 5432
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data:ro
+      - pg_archive:/var/lib/postgresql/archive
+      - ./scripts:/scripts:ro
+      - ./backup_logs:/var/log/postgres:rw
+    command: ['/usr/local/bin/backup-entrypoint.sh']
+    networks:
+      postgres-network:
+        aliases:
+          - backup
+volumes:
+  pgdata:
+    driver: local
+  pg_archive:
+    driver: local
+  pgbouncer_config:
+    driver: local
+  backup_logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${PWD}/backup_logs
+
+networks:
+  postgres-network:
+    driver: bridge
