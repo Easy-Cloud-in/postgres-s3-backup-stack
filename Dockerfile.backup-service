@@ -1,0 +1,72 @@
+FROM postgres:16-bullseye
+
+# Install additional required packages
+RUN apt-get update && apt-get install -y \
+    python3-pip \
+    curl \
+    wget \
+    cron \
+    procps \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install AWS CLI
+RUN pip3 install awscli
+
+# Install wal-g using wget
+RUN wget https://github.com/wal-g/wal-g/releases/download/v2.0.1/wal-g-pg-ubuntu-20.04-amd64.tar.gz \
+    && tar -xzf wal-g-pg-ubuntu-20.04-amd64.tar.gz \
+    && mv wal-g-pg-ubuntu-20.04-amd64 /usr/local/bin/wal-g \
+    && rm wal-g-pg-ubuntu-20.04-amd64.tar.gz \
+    && chmod +x /usr/local/bin/wal-g
+
+# Create necessary directories with proper permissions
+RUN mkdir -p /var/run \
+    && mkdir -p /var/log/postgres \
+    && mkdir -p /home/postgres \
+    && mkdir -p /etc/cron.d \
+    && chmod 777 /var/run \
+    && chmod 777 /var/log/postgres \
+    && chmod 777 /home/postgres \
+    && chmod 777 /etc/cron.d \
+    && chmod 777 /var/log
+
+# Install gosu
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y gosu; \
+    rm -rf /var/lib/apt/lists/*; \
+    # verify that the binary works
+    gosu nobody true
+
+# Copy scripts
+COPY scripts/backup-entrypoint.sh /usr/local/bin/
+COPY scripts/perform-backup.sh /usr/local/bin/
+COPY scripts/test-backup.sh /usr/local/bin/
+COPY scripts/verify-walg.sh /usr/local/bin/
+COPY scripts/debug-aws.sh /usr/local/bin/
+COPY scripts/validate-backup-config.sh /usr/local/bin/
+
+# Ensure scripts are executable
+RUN chmod +x /usr/local/bin/backup-entrypoint.sh \
+    && chmod +x /usr/local/bin/perform-backup.sh \
+    && chmod +x /usr/local/bin/test-backup.sh \
+    && chmod +x /usr/local/bin/verify-walg.sh \
+    && chmod +x /usr/local/bin/debug-aws.sh \
+    && chmod +x /usr/local/bin/validate-backup-config.sh
+
+# Create log files with proper permissions
+RUN touch /var/log/backup.log /var/log/cron.log \
+    && chmod 666 /var/log/backup.log \
+    && chmod 666 /var/log/cron.log
+
+# Set proper ownership for postgres user
+RUN chown -R postgres:postgres /var/run \
+    && chown -R postgres:postgres /var/log/postgres \
+    && chown -R postgres:postgres /home/postgres \
+    && chown -R postgres:postgres /etc/cron.d \
+    && chown postgres:postgres /var/log/backup.log \
+    && chown postgres:postgres /var/log/cron.log
+
+WORKDIR /
+
+CMD ["/usr/local/bin/backup-entrypoint.sh"]

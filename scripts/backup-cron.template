@@ -1,0 +1,6 @@
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+BACKUP_ENV=/home/postgres/backup.env
+
+# Run backup every day at 1 AM
+0 1 * * * source $BACKUP_ENV && /scripts/perform-backup.sh >> /backup_logs/backup.log 2>&1

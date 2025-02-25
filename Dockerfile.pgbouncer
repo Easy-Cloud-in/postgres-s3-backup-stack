@@ -1,0 +1,25 @@
+FROM edoburu/pgbouncer:1.18.0
+
+USER root
+
+# Install required packages
+RUN apk add --no-cache \
+    bash \
+    gettext
+
+# Create necessary directories
+RUN mkdir -p /etc/pgbouncer && \
+    mkdir -p /var/log/pgbouncer && \
+    mkdir -p /var/run/pgbouncer && \
+    chown -R postgres:postgres /etc/pgbouncer && \
+    chown -R postgres:postgres /var/log/pgbouncer && \
+    chown -R postgres:postgres /var/run/pgbouncer && \
+    chmod 755 /etc/pgbouncer
+
+# Copy the init script and template
+COPY scripts/init-userlist.sh /init-userlist.sh
+COPY pgbouncer/pgbouncer.ini.template /etc/pgbouncer/pgbouncer.ini.template
+
+RUN chmod +x /init-userlist.sh
+
+USER postgres
